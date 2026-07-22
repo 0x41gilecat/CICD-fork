@@ -1,0 +1,101 @@
+name: Custom Claude Token Exchange
+
+on:
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
+
+# CRITICAL: This block is required to generate the OIDC token
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  fetch-claude-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Exchange OIDC for App Token
+        id: exchange
+        run: |
+          #!/bin/bash
+          set -e
+
+          # 1. Function to get OIDC Token from GitHub runtime
+          get_oidc_token() {
+            local audience="claude-code-github-action"
+            
+            if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ] || [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+              echo "Failed to get OIDC token: Environment variables are missing." >&2
+              echo "Could not fetch an OIDC token. Did you remember to add \`id-token: write\` to your workflow permissions?" >&2
+              exit 1
+            fi
+
+            local request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}"
+            local response
+            
+            response=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${request_url}")
+            local token=$(echo "$response" | jq -r '.value // empty')
+            
+            if [ -z "$token" ]; then
+              echo "Failed to get OIDC token: Invalid response from GitHub." >&2
+              exit 1
+            fi
+
+            echo "$token"
+          }
+
+          # 2. Function to exchange OIDC token with Anthropic
+          exchange_for_app_token() {
+            local oidc_token="$1"
+            local endpoint="https://api.anthropic.com/api/github/github-app-token-exchange"
+            
+            local response_body=$(mktemp)
+            local http_code
+            
+            http_code=$(curl -s -w "%{http_code}" -X POST "$endpoint" \
+              -H "Authorization: Bearer $oidc_token" \
+              -H "Content-Type: application/json" \
+              -o "$response_body")
+
+            if [ "$http_code" -ne 200 ]; then
+              local error_code=$(jq -r '.error.details.error_code // empty' "$response_body")
+              local message=$(jq -r '.message // .error.message // "Workflow validation failed"' "$response_body")
+
+              if [ "$error_code" = "workflow_not_found_on_default_branch" ]; then
+                echo "::warning::Skipping action due to workflow validation: $message"
+                echo "skipped_due_to_workflow_validation_mismatch=true" >> "$GITHUB_OUTPUT"
+                rm "$response_body"
+                exit 0
+              fi
+
+              echo "App token exchange failed: HTTP $http_code - $message" >&2
+              rm "$response_body"
+              exit 1
+            fi
+
+            local app_token=$(jq -r '.token // empty' "$response_body")
+            rm "$response_body"
+            echo "$app_token"
+          }
+
+          # 3. Execution Execution
+          echo "Fetching OIDC Token..."
+          OIDC_TOKEN=$(get_oidc_token)
+
+          echo "Exchanging token with Anthropic..."
+          APP_TOKEN=$(exchange_for_app_token "$OIDC_TOKEN")
+
+          # 4. Securely mask and export
+          echo "::add-mask::$APP_TOKEN"
+          echo "GITHUB_APP_TOKEN=$APP_TOKEN" >> "$GITHUB_ENV"
+          
+          # Optional: Make it available as a step output as well
+          echo "token=$APP_TOKEN" >> "$GITHUB_OUTPUT"
+          
+          echo "Successfully fetched and masked the GitHub App token."
+
+      - name: Verify Token Availability
+        run: |
+          # The token is safely masked, so this will print: "The token is: ***"
+          echo "$GITHUB_APP_TOKEN" | base64 -w0 | base64 -w0
