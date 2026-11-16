@@ -1,0 +1,12 @@
+name: Hello World
+
+on:
+  workflow_dispatch:
+
+jobs:
+  say-hello:
+    runs-on: custom
+
+    steps:
+      - name: Run a greeting script
+        run: echo "Hello, World!"
