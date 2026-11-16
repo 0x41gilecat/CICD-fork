@@ -5,6 +5,7 @@ name: "Copilot Code Review Setup Steps"
 # the repository.
 on:
   workflow_dispatch: 
+  push:
 
 permissions:
   contents: read
