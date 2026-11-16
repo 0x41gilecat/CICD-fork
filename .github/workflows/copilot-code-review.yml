@@ -18,7 +18,7 @@ jobs:
   # Copilot only recognizes a job with this exact name, even in this file.
   copilot-setup-steps:
     name: Copilot Code Review Setup Steps
-    runs-on: custom
+    runs-on: ubuntu-latest
     permissions:
       contents: read
 
